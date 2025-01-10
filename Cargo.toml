@@ -4,6 +4,7 @@ version = "0.1.0-unsafe"
 edition = "2021"
 license = "MIT"
 description = "fetureless HTTP server library"
+repository = "https://github.com/Marfa-Creation/ralavest"
 
 [dependencies]
 tokio = { version = "1.42.0", features = ["full"] }
