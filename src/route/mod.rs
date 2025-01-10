@@ -198,6 +198,69 @@ impl MethodRouter {
         return self;
     }
 
+    
+    pub fn head<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+        if self.methods.contains(&Method::Head) {
+            panic!("route cannot have multiple handler for single method ");
+        }
+
+        self.methods.push(Method::Head);
+
+        self.handlers.push(Box::new(handler));
+
+        return self;
+    }
+
+
+    pub fn options<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+        if self.methods.contains(&Method::Options) {
+            panic!("route cannot have multiple handler for single method ");
+        }
+
+        self.methods.push(Method::Options);
+
+        self.handlers.push(Box::new(handler));
+
+        return self;
+    }
+
+    
+    pub fn trace<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+        if self.methods.contains(&Method::Trace) {
+            panic!("route cannot have multiple handler for single method ");
+        }
+
+        self.methods.push(Method::Trace);
+
+        self.handlers.push(Box::new(handler));
+
+        return self;
+    }
+    
+    pub fn put<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+        if self.methods.contains(&Method::Put) {
+            panic!("route cannot have multiple handler for single method ");
+        }
+
+        self.methods.push(Method::Put);
+
+        self.handlers.push(Box::new(handler));
+
+        return self;
+    }
+    
+    pub fn delete<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+        if self.methods.contains(&Method::Delete) {
+            panic!("route cannot have multiple handler for single method ");
+        }
+
+        self.methods.push(Method::Delete);
+
+        self.handlers.push(Box::new(handler));
+
+        return self;
+    }
+    
     pub fn post<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
         if self.methods.contains(&Method::Post) {
             panic!("route cannot have multiple handler for single method ");
@@ -210,36 +273,24 @@ impl MethodRouter {
         return self;
     }
 
-    pub fn put<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
-        if self.methods.contains(&Method::Put) {
-            panic!("route cannot have multiple handler for single method ");
-        }
-
-        self.methods.push(Method::Put);
-
-        self.handlers.push(Box::new(handler));
-
-        return self;
-    }
-
-    pub fn delete<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
-        if self.methods.contains(&Method::Delete) {
-            panic!("route cannot have multiple handler for single method ");
-        }
-
-        self.methods.push(Method::Delete);
-
-        self.handlers.push(Box::new(handler));
-
-        return self;
-    }
-
     pub fn patch<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
         if self.methods.contains(&Method::Patch) {
             panic!("route cannot have multiple handler for single method ");
         }
 
         self.methods.push(Method::Patch);
+
+        self.handlers.push(Box::new(handler));
+
+        return self;
+    }
+
+    pub fn connect<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+        if self.methods.contains(&Method::Connect) {
+            panic!("route cannot have multiple handler for single method ");
+        }
+
+        self.methods.push(Method::Connect);
 
         self.handlers.push(Box::new(handler));
 

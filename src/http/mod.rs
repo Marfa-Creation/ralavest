@@ -16,9 +16,8 @@ pub struct Request {
 
 //TODO: create constructor
 impl Request {
-
     pub fn get_start_line<'s>(&'s self) -> String {
-        return format!("{:?} {} {}", self.method, self.path, self.protocol)
+        return format!("{:?} {} {}", self.method, self.path, self.protocol);
     }
 
     pub fn get_headers<'s>(&self) -> &HashMap<String, String> {
@@ -36,7 +35,6 @@ impl Request {
     pub fn get_method(&self) -> &Method {
         return &self.method;
     }
-    
 }
 
 impl TryFrom<&str> for Request {
@@ -358,10 +356,14 @@ impl std::error::Error for HttpParseError {}
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum Method {
     Get,
-    Post,
+    Head,
+    Options,
+    Trace,
     Put,
     Delete,
+    Post,
     Patch,
+    Connect,
 }
 
 impl std::fmt::Debug for Method {
@@ -375,6 +377,10 @@ impl std::fmt::Debug for Method {
                 Method::Put => "PUT",
                 Method::Delete => "DELETE",
                 Method::Patch => "PATCH",
+                Method::Head => "HEAD",
+                Method::Options => "OPTIONS",
+                Method::Trace => "TRACE",
+                Method::Connect => "CONNECT",
             }
         )
     }
@@ -388,6 +394,10 @@ impl ToString for Method {
             Method::Put => "PUT".to_string(),
             Method::Delete => "DELETE".to_string(),
             Method::Patch => "PATCH".to_string(),
+            Method::Head => "HEAD".to_string(),
+            Method::Options => "OPTIONS".to_string(),
+            Method::Trace => "TRACE".to_string(),
+            Method::Connect => "CONNECT".to_string(),
         }
     }
 }
@@ -399,10 +409,14 @@ impl TryFrom<&str> for Method {
         Ok({
             match value.to_lowercase().as_str() {
                 "get" => Get,
-                "post" => Post,
+                "head" => Head,
+                "options" => Options,
+                "trace" => Trace,
                 "put" => Put,
                 "delete" => Delete,
+                "post" => Post,
                 "patch" => Patch,
+                "connect" => Connect,
                 _ => {
                     return Err(HttpParseError(format!(
                         "failed to parse '{}' into http::Method",

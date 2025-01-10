@@ -1,6 +1,6 @@
 [package]
 name = "ralavest"
-version = "0.1.0-unsafe"
+version = "0.2.1-unsafe"
 edition = "2021"
 license = "MIT"
 description = "fetureless HTTP server library"
