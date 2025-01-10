@@ -1,0 +1,15 @@
+[package]
+name = "ralavest"
+version = "0.1.0-unsafe"
+edition = "2021"
+license = "MIT"
+description = "fetureless HTTP server library"
+
+[dependencies]
+tokio = { version = "1.42.0", features = ["full"] }
+
+
+# debugging purpose
+[[bin]]
+name = "bin"
+path = "src/bin.rs"
