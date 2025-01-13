@@ -5,7 +5,7 @@ use std::{
 };
 
 //TODO: adding field(protocol, )
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Request {
     method: Method,
     path: String,
@@ -41,14 +41,13 @@ impl TryFrom<&str> for Request {
     type Error = HttpParseError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        // trim_matches for delete unused buffer
+        // trim_matches is used for delete unused buffer
         let mut value = value
             .trim()
             .trim_matches('\0')
             .lines()
             .into_iter()
             .collect::<Vec<&str>>();
-        println!("original value: {:#?}", value);
         let start_line = value
             .get(0)
             .ok_or(HttpParseError(
@@ -83,25 +82,7 @@ impl TryFrom<&str> for Request {
         };
 
         let protocol = start_line.replace(format!("{:?} {} ", method, path).as_str(), "");
-        //     {
-        //     let mut path = String::new();
-        //     for i in start_line
-        //         .replace(format!("{:?} {} ", method, path).as_str(), "")
-        //         .as_bytes()
-        //     {
-        //         if i == &b' ' {
-        //             break;
-        //         }
 
-        //         path += str::from_utf8(&[*i]).expect("invalid converting u32 into char");
-        //     }
-        //     path
-        // };
-
-        println!(
-            "method: {:?}\npath: {}\nprotocol: {}",
-            method, path, protocol
-        );
         // remove first line that has readed
         value.remove(0);
         let headers = {
@@ -143,7 +124,6 @@ impl TryFrom<&str> for Request {
 }
 
 //TODO: make getter for field
-//TODO: make protocol, status_code, and status_text referencing into start_line substring instead owning the string
 #[derive(Debug)]
 pub struct Response {
     protocol: String,
@@ -274,16 +254,6 @@ impl TryFrom<&str> for Response {
         let status_text = start_line
             .clone()
             .replace(format!("{} {} ", protocol, status_code).as_str(), "");
-        //     {
-        //     let mut status_text = String::new();
-        //     for i in start_line
-        //         .replace(format!("{} {} ", protocol, status_code).as_str(), "")
-        //         .as_bytes()
-        //     {
-        //         status_text += str::from_utf8(&[*i]).expect("invalid converting u32 into char");
-        //     }
-        //     status_text
-        // };
 
         // remove first line that has readed
         value.remove(0);
@@ -328,6 +298,12 @@ pub trait IntoResponse {
     fn into_response(self) -> Response;
 }
 
+impl IntoResponse for Response {
+    fn into_response(self) -> Response {
+        return self;
+    }
+}
+
 impl<S> IntoResponse for S
 where
     S: ToString,
@@ -352,7 +328,6 @@ impl Display for HttpParseError {
 
 impl std::error::Error for HttpParseError {}
 
-//TODO: add more HTTP method
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum Method {
     Get,

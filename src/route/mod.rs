@@ -1,3 +1,4 @@
+use core::str;
 use std::{
     collections::{HashMap, HashSet},
     io,
@@ -6,13 +7,13 @@ use std::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
-    handler::Handler,
+    handler::{Handler, IntoHandler},
     http::{self, Method, Request, Response},
 };
 
 pub async fn serve<L>(listener: L, router: Router) -> io::Result<()>
 where
-    L: Into<tokio::net::TcpListener>
+    L: Into<tokio::net::TcpListener>,
 {
     let router = Arc::new(router);
 
@@ -23,41 +24,62 @@ where
     loop {
         let router = router.clone();
 
+        // TODO: question mark operator may cause panic(in spawned async task)
+        // because question mark operator return into the `spawn` callback
+        // instead of returning the error to `serve` function
         let (mut stream, _) = listener.accept().await?;
         rt.spawn(async move {
-            println!("outer task spawn");
+            //TODO: handle if buffer full. delete every element that contain 0(null character repr)
             let mut buff = [0; 1024];
+            let mut string_buff = String::new();
 
             if let Ok(_) = stream.read(&mut buff).await {
-                if let Ok(v) = String::from_utf8(buff.into()) {
-                    if let Ok(req) = Request::try_from(v.as_str()) {
+
+
+                if let Ok(_) = String::from_utf8(buff.into()){
+
+                    
+                loop {
+                    
+                          string_buff += String::from_utf8(buff.into()).unwrap().as_str();
+
+                    // if the last element of buff is not '\0'(null)
+                    // it's mean the buffer already fill out
+                    if buff.last().unwrap()!= &b'\0' {
+                            buff = [0; 1024];
+                            stream.read(&mut buff).await?;
+                   } else {
+                        break;
+                    }
+                }
+                    
+                    if let Ok(req) = Request::try_from(string_buff.as_str()) {
 
                         // single route can have multiple method to handled(which mean has multiple handler too)
-                        for ((router_route, router_methods), router_handlers) in router
+                        'outer:for ((router_route, router_methods), router_handlers) in router
                             .routes
                             .iter()
                             .zip(router.method_routers.iter().map(|i| &i.methods).clone())
                             .zip(router.method_routers.iter().map(|i| &i.handlers).map(|h| h))
                         {
 
-                            // match request with route
-                            if req.get_path() == router_route {
+                            // match request with route,
+                            // only taking path from user without taking the query param
+                            // example: /login?usr=admin&pw=admin1234 -> /login
+                            if req.get_path().split_once("?").unwrap_or((req.get_path(), "")).0 == router_route {
 
                                 //match request with method
                                 for (router_method, router_handler) in
                                     router_methods.into_iter().zip(router_handlers)
                                 {
                                     if req.get_method() == router_method {
-                                        println!(
-                                            "method match {:?} {}",
-                                            router_method, router_route
-                                        );
+                                        println!("method match {:?} {:?}", req.get_method(), router_method);
                                         stream
-                                            .write_all(router_handler.call().raw().as_bytes())
+                                            .write_all(router_handler.call(req.clone()).raw().as_bytes())
                                             .await?;
 
                                         // break to avoid triggering "Method Not Allowed"
-                                        break;
+                                        break 'outer;
                                     }
 
                                 }
@@ -95,12 +117,16 @@ where
                                     .as_bytes(),
                             )
                             .await
-                            .unwrap();
-                    }
+                            .unwrap_or(());
+                        // response "Bad Request" if the parser(`try_from` function) return Err
+                    } else {
+                        stream.write_all(Response::new().set_protocol("HTTP/1.1").set_status_code(400).set_status_text("Bad Request").raw().as_bytes()).await?;
+                    }}
+                } else {
+                    println!("invalid UTF8");
+                    stream.write_all(Response::new().set_protocol("HTTP/1.1").set_status_code(400).set_status_text("Bad Request").set_header("Content-Type", "application/json").set_body("\"message\": \"invalid encoding request into UTF8\"").raw().as_bytes()).await?;
                 }
-            }
 
-            // stream.write_all(html.as_bytes()).await.unwrap();
             return Ok::<(), std::io::Error>(());
         });
     }
@@ -108,8 +134,6 @@ where
 
 pub struct Router {
     routes: HashSet<String>,
-    // methods: Vec<Vec<Method>>,
-    // handlers: Vec<Vec<Box<dyn Handler + Send + Sync>>>,
     method_routers: Vec<MethodRouter>,
 }
 
@@ -127,26 +151,19 @@ impl Router {
 
         self.method_routers.push(method_router);
 
-        // self.methods.push(Vec::from(
-        //     method_router.methods.into_iter().collect::<Vec<Method>>(),
-        // ));
-
-        // self.handlers.push(method_router.handlers);
-
         return self;
     }
 
     pub fn new() -> Self {
         return Router {
             routes: HashSet::new(),
-            method_routers: vec![], // methods: vec![],
-                                    // handlers: vec![],
+            method_routers: vec![], 
         };
     }
 }
 
 #[allow(dead_code)]
-//TODO: need to revied because lack of my knowledge about percent encoding
+//TODO: need to reviewed because lack of my knowledge about percent encoding
 fn percent_encoding(mut string: String) -> String {
     let list = HashMap::from([
         (":", "%3A"),
@@ -186,149 +203,235 @@ pub struct MethodRouter {
 
 //TODO: i think repeating method can be cut into macro
 impl MethodRouter {
-    pub fn get<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+    pub fn get<H, I>(mut self, handler: impl IntoHandler<I, Handler = H>) -> Self
+    where
+        H: Handler + Send + Sync + 'static,
+    {
         if self.methods.contains(&Method::Get) {
             panic!("route cannot have multiple handler for single method ");
         }
 
         self.methods.push(Method::Get);
 
-        self.handlers.push(Box::new(handler));
+        self.handlers.push(Box::new(handler.into_handler()));
 
         return self;
     }
 
-    
-    pub fn head<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+    pub fn head<I, H>(
+        mut self,
+        handler: impl IntoHandler<I, Handler = H>,
+    ) -> Self where H: Handler + Send + Sync + 'static {
         if self.methods.contains(&Method::Head) {
             panic!("route cannot have multiple handler for single method ");
         }
 
         self.methods.push(Method::Head);
 
-        self.handlers.push(Box::new(handler));
+        self.handlers.push(Box::new(handler.into_handler()));
 
         return self;
     }
 
-
-    pub fn options<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+    pub fn options<I, H: Handler + Send + Sync + 'static>(
+        mut self,
+        handler: impl IntoHandler<I, Handler = H>,
+    ) -> Self {
         if self.methods.contains(&Method::Options) {
             panic!("route cannot have multiple handler for single method ");
         }
 
         self.methods.push(Method::Options);
 
-        self.handlers.push(Box::new(handler));
+        self.handlers.push(Box::new(handler.into_handler()));
 
         return self;
     }
 
-    
-    pub fn trace<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+    pub fn trace<I, H: Handler + Send + Sync + 'static>(
+        mut self,
+        handler: impl IntoHandler<I, Handler = H>,
+    ) -> Self {
         if self.methods.contains(&Method::Trace) {
             panic!("route cannot have multiple handler for single method ");
         }
 
         self.methods.push(Method::Trace);
 
-        self.handlers.push(Box::new(handler));
+        self.handlers.push(Box::new(handler.into_handler()));
 
         return self;
     }
-    
-    pub fn put<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+
+    pub fn put<I, H: Handler + Send + Sync + 'static>(
+        mut self,
+        handler: impl IntoHandler<I, Handler = H>,
+    ) -> Self {
         if self.methods.contains(&Method::Put) {
             panic!("route cannot have multiple handler for single method ");
         }
 
         self.methods.push(Method::Put);
 
-        self.handlers.push(Box::new(handler));
+        self.handlers.push(Box::new(handler.into_handler()));
 
         return self;
     }
-    
-    pub fn delete<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+
+    pub fn delete<I, H: Handler + Send + Sync + 'static>(
+        mut self,
+        handler: impl IntoHandler<I, Handler = H>,
+    ) -> Self {
         if self.methods.contains(&Method::Delete) {
             panic!("route cannot have multiple handler for single method ");
         }
 
         self.methods.push(Method::Delete);
 
-        self.handlers.push(Box::new(handler));
+        self.handlers.push(Box::new(handler.into_handler()));
 
         return self;
     }
-    
-    pub fn post<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+
+    pub fn post<I, H: Handler + Send + Sync + 'static>(
+        mut self,
+        handler: impl IntoHandler<I, Handler = H>,
+    ) -> Self {
         if self.methods.contains(&Method::Post) {
             panic!("route cannot have multiple handler for single method ");
         }
 
         self.methods.push(Method::Post);
 
-        self.handlers.push(Box::new(handler));
+        self.handlers.push(Box::new(handler.into_handler()));
 
         return self;
     }
 
-    pub fn patch<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+    pub fn patch<I, H: Handler + Send + Sync + 'static>(
+        mut self,
+        handler: impl IntoHandler<I, Handler = H>,
+    ) -> Self {
         if self.methods.contains(&Method::Patch) {
             panic!("route cannot have multiple handler for single method ");
         }
 
         self.methods.push(Method::Patch);
 
-        self.handlers.push(Box::new(handler));
+        self.handlers.push(Box::new(handler.into_handler()));
 
         return self;
     }
 
-    pub fn connect<H: Handler + Send + Sync + 'static>(mut self, handler: H) -> Self {
+    pub fn connect<I, H: Handler + Send + Sync + 'static>(
+        mut self,
+        handler: impl IntoHandler<I, Handler = H>,
+    ) -> Self {
         if self.methods.contains(&Method::Connect) {
             panic!("route cannot have multiple handler for single method ");
         }
 
         self.methods.push(Method::Connect);
 
-        self.handlers.push(Box::new(handler));
+        self.handlers.push(Box::new(handler.into_handler()));
 
         return self;
     }
 }
 
-pub fn get<H: Handler + Send + Sync + 'static>(handler: H) -> MethodRouter {
+pub fn get<I, H: Handler + Send + Sync + 'static>(
+    handler: impl IntoHandler<I, Handler = H>,
+) -> MethodRouter {
     return MethodRouter {
         methods: vec![Method::Get],
-        handlers: Vec::from([Box::new(handler) as Box<dyn Handler + Send + Sync>; 1]),
+        handlers: Vec::from(
+            [Box::new(handler.into_handler()) as Box<dyn Handler + Send + Sync>; 1],
+        ),
     };
 }
 
-pub fn post<H: Handler + Send + Sync + 'static>(handler: H) -> MethodRouter {
+pub fn head<I, H: Handler + Send + Sync + 'static>(
+    handler: impl IntoHandler<I, Handler = H>,
+) -> MethodRouter {
     return MethodRouter {
-        methods: vec![Method::Post],
-        handlers: Vec::from([Box::new(handler) as Box<dyn Handler + Send + Sync>; 1]),
+        methods: vec![Method::Head],
+        handlers: Vec::from(
+            [Box::new(handler.into_handler()) as Box<dyn Handler + Send + Sync>; 1],
+        ),
+    };
+}
+pub fn options<I, H: Handler + Send + Sync + 'static>(
+    handler: impl IntoHandler<I, Handler = H>,
+) -> MethodRouter {
+    return MethodRouter {
+        methods: vec![Method::Options],
+        handlers: Vec::from(
+            [Box::new(handler.into_handler()) as Box<dyn Handler + Send + Sync>; 1],
+        ),
+    };
+}
+pub fn trace<I, H: Handler + Send + Sync + 'static>(
+    handler: impl IntoHandler<I, Handler = H>,
+) -> MethodRouter {
+    return MethodRouter {
+        methods: vec![Method::Trace],
+        handlers: Vec::from(
+            [Box::new(handler.into_handler()) as Box<dyn Handler + Send + Sync>; 1],
+        ),
     };
 }
 
-pub fn update<H: Handler + Send + Sync + 'static>(handler: H) -> MethodRouter {
+pub fn put<I, H: Handler + Send + Sync + 'static, >(
+    handler: impl IntoHandler<I, Handler = H>,
+) -> MethodRouter {
     return MethodRouter {
         methods: vec![Method::Put],
-        handlers: Vec::from([Box::new(handler) as Box<dyn Handler + Send + Sync>; 1]),
+        handlers: Vec::from(
+            [Box::new(handler.into_handler()) as Box<dyn Handler + Send + Sync>; 1],
+        ),
     };
 }
 
-pub fn delete<H: Handler + Send + Sync + 'static>(handler: H) -> MethodRouter {
+pub fn delete<I, H: Handler + Send + Sync + 'static, >(
+    handler: impl IntoHandler<I, Handler = H>,
+) -> MethodRouter {
     return MethodRouter {
         methods: vec![Method::Delete],
-        handlers: Vec::from([Box::new(handler) as Box<dyn Handler + Send + Sync>; 1]),
+        handlers: Vec::from(
+            [Box::new(handler.into_handler()) as Box<dyn Handler + Send + Sync>; 1],
+        ),
     };
 }
 
-pub fn patch<H: Handler + Send + Sync + 'static>(handler: H) -> MethodRouter {
+pub fn post<I, H: Handler + Send + Sync + 'static, >(
+    handler: impl IntoHandler<I, Handler = H>,
+) -> MethodRouter {
+    return MethodRouter {
+        methods: vec![Method::Post],
+        handlers: Vec::from(
+            [Box::new(handler.into_handler()) as Box<dyn Handler + Send + Sync>; 1],
+        ),
+    };
+}
+
+pub fn patch<I, H: Handler + Send + Sync + 'static, >(
+    handler: impl IntoHandler<I, Handler = H>,
+) -> MethodRouter {
     return MethodRouter {
         methods: vec![Method::Patch],
-        handlers: Vec::from([Box::new(handler) as Box<dyn Handler + Send + Sync>; 1]),
+        handlers: Vec::from(
+            [Box::new(handler.into_handler()) as Box<dyn Handler + Send + Sync>; 1],
+        ),
+    };
+}
+
+pub fn connect<I, H: Handler + Send + Sync + 'static>(
+    handler: impl IntoHandler<I, Handler = H>,
+) -> MethodRouter {
+    return MethodRouter {
+        methods: vec![Method::Connect],
+        handlers: Vec::from(
+            [Box::new(handler.into_handler()) as Box<dyn Handler + Send + Sync>; 1],
+        ),
     };
 }
