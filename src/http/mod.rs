@@ -4,12 +4,11 @@ use std::{
     fmt::Display,
 };
 
-//TODO: adding field(protocol, )
 #[derive(Debug, Clone)]
 pub struct Request {
     method: Method,
     path: String,
-    protocol: String,
+    protocol: Protocol,
     headers: HashMap<String, String>,
     body: String,
 }
@@ -17,7 +16,19 @@ pub struct Request {
 //TODO: create constructor
 impl Request {
     pub fn get_start_line<'s>(&'s self) -> String {
-        return format!("{:?} {} {}", self.method, self.path, self.protocol);
+        return format!("{:?} {} {:?}", self.method, self.path, self.protocol);
+    }
+
+    pub fn get_method(&self) -> &Method {
+        return &self.method;
+    }
+
+    pub fn get_path(&self) -> &str {
+        return &self.path;
+    }
+
+    pub fn get_protocol(&self) -> &Protocol {
+        return &self.protocol;
     }
 
     pub fn get_headers<'s>(&self) -> &HashMap<String, String> {
@@ -27,18 +38,10 @@ impl Request {
     pub fn get_body(&self) -> &str {
         return &self.body;
     }
-
-    pub fn get_path(&self) -> &str {
-        return &self.path;
-    }
-
-    pub fn get_method(&self) -> &Method {
-        return &self.method;
-    }
 }
 
 impl TryFrom<&str> for Request {
-    type Error = HttpParseError;
+    type Error = ParseError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         // trim_matches is used for delete unused buffer
@@ -50,7 +53,7 @@ impl TryFrom<&str> for Request {
             .collect::<Vec<&str>>();
         let start_line = value
             .get(0)
-            .ok_or(HttpParseError(
+            .ok_or(ParseError(
                 "HTTP message cannot be built from empty string".to_string(),
             ))?
             .to_string();
@@ -81,7 +84,7 @@ impl TryFrom<&str> for Request {
             path
         };
 
-        let protocol = start_line.replace(format!("{:?} {} ", method, path).as_str(), "");
+        let protocol = Protocol::try_from(start_line.replace(format!("{:?} {} ", method, path).as_str(), "").as_str())?;
 
         // remove first line that has readed
         value.remove(0);
@@ -96,7 +99,7 @@ impl TryFrom<&str> for Request {
                 // remove headers that has readed
                 let (k, v) = i
                     .split_once(':')
-                    .ok_or(HttpParseError("invalid header of HTTP message".to_string()))?;
+                    .ok_or(ParseError("invalid header of HTTP message".to_string()))?;
 
                 headers.insert(k.trim().to_string(), v.trim().to_string());
 
@@ -126,7 +129,7 @@ impl TryFrom<&str> for Request {
 //TODO: make getter for field
 #[derive(Debug)]
 pub struct Response {
-    protocol: String,
+    protocol: Protocol,
     status_code: String,
     status_text: String,
     //NOTE: IDK is it slower than HashMap or not. for now i using this to make the unit test consistent
@@ -140,7 +143,7 @@ impl Response {
     pub fn new() -> Self {
         let content = "<h1>Hello World</h1>";
         Self {
-            protocol: "HTTP/1.1".to_string(),
+            protocol: Protocol::HTTP_1_1,
             status_code: 200.to_string(),
             status_text: "OK".to_string(),
             headers: BTreeMap::from([
@@ -157,8 +160,8 @@ impl Response {
 
     //openregion: --> setter
 
-    pub fn set_protocol(mut self, protocol: impl ToString) -> Self {
-        self.protocol = protocol.to_string();
+    pub fn set_protocol(mut self, protocol: Protocol) -> Self {
+        self.protocol = protocol;
         return self;
     }
 
@@ -199,14 +202,14 @@ impl Response {
         };
 
         return format!(
-            "{} {} {}\n{}\n{}\n",
+            "{:?} {} {}\n{}\n{}\n",
             self.protocol, self.status_code, self.status_text, headers, self.body
         );
     }
 }
 
 impl TryFrom<&str> for Response {
-    type Error = HttpParseError;
+    type Error = ParseError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         // trim_matches for delete unused buffer
@@ -216,15 +219,14 @@ impl TryFrom<&str> for Response {
             .lines()
             .into_iter()
             .collect::<Vec<&str>>();
-        println!("original value: {:#?}", value);
         let start_line = value
             .get(0)
-            .ok_or(HttpParseError(
+            .ok_or(ParseError(
                 "HTTP message cannot be built from empty string".to_string(),
             ))?
             .to_string();
 
-        let protocol: String = {
+        let protocol = {
             let mut protocol = String::new();
             for i in start_line.as_bytes() {
                 if i == &b' ' {
@@ -233,8 +235,8 @@ impl TryFrom<&str> for Response {
 
                 protocol += str::from_utf8(&[*i]).expect("invalid converting u32 into char");
             }
-            protocol.as_str().try_into().expect("unhandled error")
-        };
+            Protocol::try_from(protocol.as_str())
+        }?;
 
         let status_code = {
             let mut status_code = String::new();
@@ -253,7 +255,7 @@ impl TryFrom<&str> for Response {
 
         let status_text = start_line
             .clone()
-            .replace(format!("{} {} ", protocol, status_code).as_str(), "");
+            .replace(format!("{:?} {} ", protocol, status_code).as_str(), "");
 
         // remove first line that has readed
         value.remove(0);
@@ -267,7 +269,7 @@ impl TryFrom<&str> for Response {
 
                 let (k, v) = i
                     .split_once(':')
-                    .ok_or(HttpParseError("invalid header of HTTP message".to_string()))?;
+                    .ok_or(ParseError("invalid header of HTTP message".to_string()))?;
 
                 headers.insert(k.trim().to_string(), v.trim().to_string());
                 // remove headers that has readed
@@ -316,29 +318,30 @@ where
     }
 }
 
-//TODO: make good HttpParseError to make error handling easier
+//TODO: make good ParseError to make error handling easier
 #[derive(Debug)]
-pub struct HttpParseError(pub String);
+pub struct ParseError(pub String);
 
-impl Display for HttpParseError {
+impl Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.0)
     }
 }
 
-impl std::error::Error for HttpParseError {}
+impl std::error::Error for ParseError {}
 
+#[allow(non_camel_case_types)]
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum Method {
-    Get,
-    Head,
-    Options,
-    Trace,
-    Put,
-    Delete,
-    Post,
-    Patch,
-    Connect,
+    get,
+    head,
+    options,
+    trace,
+    put,
+    delete,
+    post,
+    patch,
+    connect,
 }
 
 impl std::fmt::Debug for Method {
@@ -347,15 +350,15 @@ impl std::fmt::Debug for Method {
             f,
             "{}",
             match self {
-                Method::Get => "GET",
-                Method::Post => "POST",
-                Method::Put => "PUT",
-                Method::Delete => "DELETE",
-                Method::Patch => "PATCH",
-                Method::Head => "HEAD",
-                Method::Options => "OPTIONS",
-                Method::Trace => "TRACE",
-                Method::Connect => "CONNECT",
+                Method::get => "GET",
+                Method::post => "POST",
+                Method::put => "PUT",
+                Method::delete => "DELETE",
+                Method::patch => "PATCH",
+                Method::head => "HEAD",
+                Method::options => "OPTIONS",
+                Method::trace => "TRACE",
+                Method::connect => "CONNECT",
             }
         )
     }
@@ -364,42 +367,90 @@ impl std::fmt::Debug for Method {
 impl ToString for Method {
     fn to_string(&self) -> String {
         match self {
-            Method::Get => "GET".to_string(),
-            Method::Post => "POST".to_string(),
-            Method::Put => "PUT".to_string(),
-            Method::Delete => "DELETE".to_string(),
-            Method::Patch => "PATCH".to_string(),
-            Method::Head => "HEAD".to_string(),
-            Method::Options => "OPTIONS".to_string(),
-            Method::Trace => "TRACE".to_string(),
-            Method::Connect => "CONNECT".to_string(),
+            Method::get => "GET".to_string(),
+            Method::post => "POST".to_string(),
+            Method::put => "PUT".to_string(),
+            Method::delete => "DELETE".to_string(),
+            Method::patch => "PATCH".to_string(),
+            Method::head => "HEAD".to_string(),
+            Method::options => "OPTIONS".to_string(),
+            Method::trace => "TRACE".to_string(),
+            Method::connect => "CONNECT".to_string(),
         }
     }
 }
 impl TryFrom<&str> for Method {
-    type Error = HttpParseError;
+    type Error = ParseError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         use Method::*;
         Ok({
             match value.to_lowercase().as_str() {
-                "get" => Get,
-                "head" => Head,
-                "options" => Options,
-                "trace" => Trace,
-                "put" => Put,
-                "delete" => Delete,
-                "post" => Post,
-                "patch" => Patch,
-                "connect" => Connect,
+                "get" => get,
+                "head" => head,
+                "options" => options,
+                "trace" => trace,
+                "put" => put,
+                "delete" => delete,
+                "post" => post,
+                "patch" => patch,
+                "connect" => connect,
                 _ => {
-                    return Err(HttpParseError(format!(
+                    return Err(ParseError(format!(
                         "failed to parse '{}' into http::Method",
                         value
                     )))
                 }
             }
         })
+    }
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Clone)]
+pub enum Protocol {
+    HTTP_1_1,
+    HTTP_2,
+    HTTP_3,
+}
+
+impl TryFrom<&str> for Protocol {
+    type Error = ParseError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        use Protocol::*;
+        return match value.to_lowercase().as_str() {
+            "http/1.1" => Ok(HTTP_1_1),
+            "http/2" => Ok(HTTP_2),
+            "http/3" => Ok(HTTP_3),
+            _ => Err(ParseError(
+                "invalid parsing &str into HTTP protocol".to_string(),
+            )),
+        };
+    }
+}
+
+impl ToString for Protocol {
+    fn to_string(&self) -> String {
+        return match self {
+            Protocol::HTTP_1_1 => "HTTP/1.1".to_string(),
+            Protocol::HTTP_2 => "HTTP/2".to_string(),
+            Protocol::HTTP_3 => "HTTP/3".to_string(),
+        };
+    }
+}
+
+impl std::fmt::Debug for Protocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return write!(
+            f,
+            "{}",
+            match self {
+                Protocol::HTTP_1_1 => "HTTP/1.1",
+                Protocol::HTTP_2 => "HTTP/2",
+                Protocol::HTTP_3 => "HTTP/3",
+            }
+        );
     }
 }
 
@@ -423,11 +474,11 @@ Content-Length: 16
 
         assert_eq!("POST /users HTTP/1.1".to_string(), req.get_start_line());
 
-        assert_eq!(Method::Post, req.method);
+        assert_eq!(Method::post, req.method);
 
         assert_eq!("/users", req.path);
 
-        assert_eq!("HTTP/1.1", req.protocol);
+        assert_eq!("HTTP/1.1", req.protocol.to_string());
 
         let headers = HashMap::from([
             ("Host", "example.com"),
@@ -464,7 +515,7 @@ Content-Type: application/json
 
         let res = Response::try_from(msg).unwrap();
 
-        assert_eq!("HTTP/1.1", res.protocol);
+        assert_eq!("HTTP/1.1", res.protocol.to_string());
 
         assert_eq!("404", res.status_code);
 
@@ -503,7 +554,7 @@ Location: http://example.com/users/123
 ";
 
         let res = Response {
-            protocol: "HTTP/1.1".to_string(),
+            protocol: Protocol::HTTP_1_1,
             status_code: "201".to_string(),
             status_text: "Created".to_string(),
             headers: BTreeMap::from([

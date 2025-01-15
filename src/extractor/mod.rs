@@ -76,7 +76,10 @@ mod tests {
 
     #[test]
     fn parse_query() {
-        let req = Request::try_from("GET /login?usr=admin&pw=admin1234#end-page").unwrap();
+        let req = Request::try_from("GET /login?usr=admin&pw=admin1234#end-page HTTP/1.1").unwrap();
+
+        
+    println!("protocol: {:?}", req.get_protocol());
 
         let query = <Query as FromRequest>::extract(req);
 

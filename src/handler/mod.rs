@@ -15,95 +15,64 @@ pub trait IntoHandler<Input> {
     fn into_handler(self) -> Self::Handler;
 }
 
-//TODO: make shorter code using macro
-impl<F, R> IntoHandler<()> for F
-where
-    F: Fn() -> R,
-    R: IntoResponse,
-{
-    type Handler = FunctionHandler<(), Self>;
-
-    fn into_handler(self) -> Self::Handler {
-        FunctionHandler {
-            f: self,
-            marker: PhantomData::default(),
+// declare with same name cause i don't have idea
+macro_rules! impl_all {
+    ($($i:ident),*) => {
+        impl<F, R, $($i),*> Handler for FunctionHandler<($($i,)*), F>
+        where
+            F: Fn($($i),*) -> R,
+            R: IntoResponse,
+            $($i: FromRequest),*
+        {
+            fn call(&self, _req: Request) -> Response {
+                return (self.f)($($i::extract(_req.clone())),*).into_response();
+            }
         }
-    }
+    };
 }
 
-impl<F, R, P1> IntoHandler<(P1,)> for F
-where
-    F: Fn(P1) -> R,
-    R: IntoResponse,
-    P1: FromRequest,
-{
-    type Handler = FunctionHandler<(P1,), Self>;
+//for now we only support max 5 extractor per handler
+impl_all!();
+impl_all!(P1);
+impl_all!(P1, P2);
+impl_all!(P1, P2, P3);
+impl_all!(P1, P2, P3, P4);
+impl_all!(P1, P2, P3, P4, P5);
 
-    fn into_handler(self) -> Self::Handler {
-        FunctionHandler {
-            f: self,
-            marker: PhantomData::default(),
+
+macro_rules! impl_all {
+    ($($i:ident),*) => {
+        impl<F, R, $($i),*> IntoHandler<($($i,)*)> for F 
+        where
+            F: Fn($($i),*) -> R,
+            R: IntoResponse,
+            $($i: FromRequest),*
+        {
+            type Handler = FunctionHandler<($($i,)*), Self>;
+
+            fn into_handler(self) -> Self::Handler {
+                FunctionHandler {
+                    f: self,
+                    marker: PhantomData::default(),
+                }
+            }
         }
-    }
+    };
 }
 
-impl<F, R, P1, P2> IntoHandler<(P1, P2)> for F
-where
-    F: Fn(P1, P2) -> R,
-    R: IntoResponse,
-    P1: FromRequest,
-    P2: FromRequest,
-{
-    type Handler = FunctionHandler<(P1, P2), Self>;
-
-    fn into_handler(self) -> Self::Handler {
-        FunctionHandler {
-            f: self,
-            marker: PhantomData::default(),
-        }
-    }
-}
-/////////////////////////////////////////////////////////////
+//for now we only support max 5 extractor per handler
+impl_all!();
+impl_all!(P1);
+impl_all!(P1, P2);
+impl_all!(P1, P2, P3);
+impl_all!(P1, P2, P3, P4);
+impl_all!(P1, P2, P3, P4, P5);
 
 pub struct FunctionHandler<Input, F> {
     f: F,
     marker: PhantomData<fn() -> Input>,
 }
 
-//TODO: make shorter code using macro
-impl<F, R> Handler for FunctionHandler<(), F>
-where
-    F: Fn() -> R,
-    R: IntoResponse,
-{
-    fn call(&self, _: Request) -> Response {
-        (self.f)().into_response()
-    }
-}
-
-impl<F, R, P1> Handler for FunctionHandler<(P1,), F>
-where
-    F: Fn(P1) -> R,
-    R: IntoResponse,
-    P1: FromRequest,
-{
-    fn call(&self, req: Request) -> Response {
-        (self.f)(P1::extract(req)).into_response()
-    }
-}
-
-impl<F, R, P1, P2> Handler for FunctionHandler<(P1, P2), F>
-where
-    F: Fn(P1, P2) -> R,
-    R: IntoResponse,
-    P1: FromRequest,
-    P2: FromRequest,
-{
-    fn call(&self, req: Request) -> Response {
-        (self.f)(P1::extract(req.clone()), P2::extract(req)).into_response()
-    }
-}
-////////////////////////////////////////
 
 impl Clone for Box<dyn Handler> {
     fn clone(&self) -> Self {
