@@ -1,4 +1,3 @@
-use core::str;
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
@@ -10,11 +9,21 @@ pub struct Request {
     path: String,
     protocol: Protocol,
     headers: HashMap<String, String>,
-    body: String,
+    body: Vec<u8>,
 }
 
 //TODO: create constructor
 impl Request {
+    pub fn new(method: Method, path: String, protocol: Protocol) -> Self {
+        return Request {
+            method,
+            path,
+            protocol,
+            headers: HashMap::new(),
+            body: vec![],
+        };
+    }
+
     pub fn get_start_line<'s>(&'s self) -> String {
         return format!("{:?} {} {:?}", self.method, self.path, self.protocol);
     }
@@ -35,28 +44,19 @@ impl Request {
         return &self.headers;
     }
 
-    pub fn get_body(&self) -> &str {
+    pub fn get_body(&self) -> &Vec<u8> {
         return &self.body;
     }
 }
 
-impl TryFrom<&str> for Request {
+impl TryFrom<&[u8]> for Request {
     type Error = ParseError;
 
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        // trim_matches is used for delete unused buffer
-        let mut value = value
-            .trim()
-            .trim_matches('\0')
-            .lines()
-            .into_iter()
-            .collect::<Vec<&str>>();
-        let start_line = value
-            .get(0)
-            .ok_or(ParseError(
-                "HTTP message cannot be built from empty string".to_string(),
-            ))?
-            .to_string();
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let mut value = lines(&trim(&trim(value, b' '), b'\0'));
+        let start_line = String::from_utf8_lossy(value.get(0).ok_or(ParseError(
+            "HTTP message cannot be built from empty string".to_string(),
+        ))?);
 
         let method: Method = {
             let mut method = String::new();
@@ -65,7 +65,9 @@ impl TryFrom<&str> for Request {
                     break;
                 }
 
-                method += str::from_utf8(&[*i]).expect("invalid converting u32 into char");
+                method += String::from_utf8([*i].to_vec())
+                    .expect("invalid converting u32 into char")
+                    .as_str();
             }
             method.as_str().try_into().expect("unhandled error")
         };
@@ -79,18 +81,26 @@ impl TryFrom<&str> for Request {
                     break;
                 }
 
-                path += str::from_utf8(&[*i]).expect("invalid converting u32 into char");
+                path += String::from_utf8([*i].to_vec())
+                    .expect("invalid converting u32 into char")
+                    .as_str();
             }
             path
         };
 
-        let protocol = Protocol::try_from(start_line.replace(format!("{:?} {} ", method, path).as_str(), "").as_str())?;
+        let protocol = Protocol::try_from(
+            start_line
+                .replace(format!("{:?} {} ", method, path).as_str(), "")
+                .as_str(),
+        )?;
 
         // remove first line that has readed
         value.remove(0);
         let headers = {
             let mut headers = HashMap::<String, String>::new();
             for i in value.clone() {
+                //only accept valid UTF8 header
+                let i = String::from_utf8_lossy(&i);
                 // based on MDN, empty line indicating the end of headers
                 if i.is_empty() {
                     break;
@@ -103,17 +113,17 @@ impl TryFrom<&str> for Request {
 
                 headers.insert(k.trim().to_string(), v.trim().to_string());
 
-                value.retain(|e| e != &i);
+                value.retain(|e| String::from_utf8_lossy(e) != i);
             }
 
             headers
         };
         let body = {
-            let mut body = String::new();
+            let mut body = vec![];
             for i in value {
-                body += i;
+                body.push(i);
             }
-            body
+            body.concat()
         };
 
         Ok(Request {
@@ -135,11 +145,12 @@ pub struct Response {
     //NOTE: IDK is it slower than HashMap or not. for now i using this to make the unit test consistent
     headers: BTreeMap<String, String>,
     //TODO: maybe we'll use Option and make Body type
-    body: String,
+    body: Vec<u8>,
 }
 
 //TODO: make good constructor
 impl Response {
+    /// construct [Response] with minimal default value
     pub fn new() -> Self {
         let content = "<h1>Hello World</h1>";
         Self {
@@ -150,8 +161,19 @@ impl Response {
                 ("Content-Length".to_string(), content.len().to_string()),
                 ("Content-Type".to_string(), "text/html".to_string()),
             ]),
-            body: content.to_string(),
+            body: content.as_bytes().to_vec(),
         }
+    }
+
+    /// the difference from [new](Self::new) is [build](Self::build) has no default value
+    pub fn build(protocol: Protocol, status_code: u32, status_text: impl ToString) -> Self {
+        return Self {
+            protocol,
+            status_code: status_code.to_string(),
+            status_text: status_text.to_string(),
+            headers: BTreeMap::new(),
+            body: vec![],
+        };
     }
 
     //openregion: --> getter
@@ -180,18 +202,15 @@ impl Response {
         return self;
     }
 
-    pub fn set_body(mut self, body: impl ToString) -> Self {
-        self.body = body.to_string().clone();
+    pub fn set_body(mut self, body: Vec<u8>) -> Self {
+        self.body = body.clone();
 
-        return self.set_header(
-            "Content-Length".to_string(),
-            body.to_string().len().to_string(),
-        );
+        return self.set_header("Content-Length".to_string(), body.len().to_string());
     }
 
     //endregion:  --> setter
 
-    pub fn raw(&self) -> String {
+    pub fn raw(&self) -> Vec<u8> {
         let headers = {
             let mut headers = String::new();
 
@@ -200,31 +219,35 @@ impl Response {
             }
             headers
         };
-
-        return format!(
-            "{:?} {} {}\n{}\n{}\n",
-            self.protocol, self.status_code, self.status_text, headers, self.body
-        );
+        return [
+            self.protocol.to_string().as_bytes(),
+            b" ",
+            &self.status_code.as_bytes(),
+            b" ",
+            &self.status_text.as_bytes(),
+            b"\n",
+            &headers.as_bytes(),
+            b"\n",
+            &self.body,
+        ]
+        .concat();
     }
 }
 
-impl TryFrom<&str> for Response {
+impl TryFrom<&[u8]> for Response {
     type Error = ParseError;
 
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         // trim_matches for delete unused buffer
-        let mut value = value
-            .trim()
-            .trim_matches('\0')
-            .lines()
-            .into_iter()
-            .collect::<Vec<&str>>();
-        let start_line = value
-            .get(0)
-            .ok_or(ParseError(
-                "HTTP message cannot be built from empty string".to_string(),
-            ))?
-            .to_string();
+        let mut value = lines(&trim(&trim(value, b' '), b'\0'));
+        // .trim()
+        // .trim_matches('\0')
+        // .lines()
+        // .into_iter()
+        // .collect::<Vec<&str>>();
+        let start_line = String::from_utf8_lossy(value.get(0).ok_or(ParseError(
+            "HTTP message cannot be built from empty string".to_string(),
+        ))?);
 
         let protocol = {
             let mut protocol = String::new();
@@ -233,7 +256,9 @@ impl TryFrom<&str> for Response {
                     break;
                 }
 
-                protocol += str::from_utf8(&[*i]).expect("invalid converting u32 into char");
+                protocol += String::from_utf8([*i].to_vec())
+                    .expect("invalid converting u32 into char")
+                    .as_str();
             }
             Protocol::try_from(protocol.as_str())
         }?;
@@ -248,7 +273,9 @@ impl TryFrom<&str> for Response {
                     break;
                 }
 
-                status_code += str::from_utf8(&[*i]).expect("invalid converting u32 into char");
+                status_code += String::from_utf8([*i].to_vec())
+                    .expect("invalid converting u32 into char")
+                    .as_str();
             }
             status_code
         };
@@ -262,6 +289,7 @@ impl TryFrom<&str> for Response {
         let headers = {
             let mut headers = BTreeMap::<String, String>::new();
             for i in value.clone() {
+                let i = String::from_utf8_lossy(&i);
                 // based on MDN, empty line indicating the end of headers
                 if i.is_empty() {
                     break;
@@ -273,17 +301,17 @@ impl TryFrom<&str> for Response {
 
                 headers.insert(k.trim().to_string(), v.trim().to_string());
                 // remove headers that has readed
-                value.retain(|e| e != &i);
+                value.retain(|e| String::from_utf8_lossy(e) != i);
             }
 
             headers
         };
         let body = {
-            let mut body = String::new();
+            let mut body = vec![];
             for i in value {
-                body += i;
+                body.push(i);
             }
-            body
+            body.concat()
         };
 
         Ok(Response {
@@ -314,7 +342,7 @@ where
         return Response::new()
             .set_header("Content-Length", self.to_string().len())
             .set_header("Content-Type", "text/html")
-            .set_body(self.to_string());
+            .set_body(self.to_string().as_bytes().to_vec());
     }
 }
 
@@ -453,6 +481,57 @@ impl std::fmt::Debug for Protocol {
         );
     }
 }
+fn lines(value: &[u8]) -> Vec<Vec<u8>> {
+    let mut result = vec![];
+    let mut chunk = vec![];
+    let mut iter = value.iter().peekable();
+    loop {
+        let now = iter.next();
+
+        if now == None {
+            break;
+        }
+
+        if (now == Some(&b'\r') && iter.next() == Some(&&b'\n')) || now == Some(&b'\n') {
+            result.push(chunk.clone());
+            chunk.clear();
+        } else if false {
+        } else {
+            chunk.push(now.unwrap().clone());
+        }
+    }
+    result.push(chunk);
+    return result;
+}
+pub fn trim(value: &[u8], ch: u8) -> Vec<u8> {
+    return {
+        let mut read = false;
+        let mut temp = vec![];
+
+        for i in value {
+            if *i != ch && read == false {
+                read = true;
+            }
+            if read {
+                temp.push(*i);
+            }
+        }
+
+        read = false;
+        let mut result = vec![];
+        for i in temp.iter().rev() {
+            if *i != ch && read == false {
+                read = true;
+            }
+            if read {
+                result.push(*i);
+            }
+        }
+        result.reverse();
+        temp.extend_from_slice(&temp.iter().map(|i| *i).rev().collect::<Vec<u8>>());
+        result
+    };
+}
 
 #[cfg(test)]
 mod tests {
@@ -470,7 +549,7 @@ Content-Length: 16
 {\"status\": \"OK\"}
 ";
 
-        let req = Request::try_from(msg).unwrap();
+        let req = Request::try_from(msg.as_bytes()).unwrap();
 
         assert_eq!("POST /users HTTP/1.1".to_string(), req.get_start_line());
 
@@ -494,7 +573,7 @@ Content-Length: 16
                 .collect::<HashMap<&str, &str>>()
         );
 
-        assert_eq!("{\"status\": \"OK\"}", req.body);
+        assert_eq!("{\"status\": \"OK\"}".as_bytes(), req.body);
     }
 
     #[test]
@@ -513,7 +592,7 @@ Content-Type: application/json
   }
 }";
 
-        let res = Response::try_from(msg).unwrap();
+        let res = Response::try_from(msg.as_bytes()).unwrap();
 
         assert_eq!("HTTP/1.1", res.protocol.to_string());
 
@@ -573,9 +652,11 @@ Location: http://example.com/users/123
     \"email\": \"bsmth@example.com\"
   }
 }"
-            .to_string(),
+            .to_string()
+            .as_bytes()
+            .to_vec(),
         };
 
-        assert_eq!(msg.trim(), res.raw().trim());
+        assert_eq!(msg.trim().as_bytes(), trim(&res.raw(), b' '));
     }
 }

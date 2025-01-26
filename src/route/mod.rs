@@ -1,9 +1,5 @@
 use core::str;
-use std::{
-    collections::{HashMap, HashSet},
-    io,
-    sync::Arc,
-};
+use std::{collections::HashMap, io, sync::Arc};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
@@ -29,104 +25,116 @@ where
         // instead of returning the error to `serve` function
         let (mut stream, _) = listener.accept().await?;
         rt.spawn(async move {
-            //TODO: handle if buffer full. delete every element that contain 0(null character repr)
             let mut buff = [0; 1024];
-            let mut string_buff = String::new();
+            let mut vec_buff = vec![];
 
             if let Ok(_) = stream.read(&mut buff).await {
+                if let Ok(_) = String::from_utf8(buff.into()) {
+                    loop {
+                        vec_buff.push(buff);
 
-
-                if let Ok(_) = String::from_utf8(buff.into()){
-
-                    
-                loop {
-                    
-                    string_buff += String::from_utf8(buff.into()).unwrap().as_str();
-
-                    // if the last element of buff is not '\0'(null)
-                    // it's mean the buffer already fill out
-                    if buff.last().unwrap()!= &b'\0' {
+                        // if the last element of buff is not '\0'(null)
+                        // it's mean the buffer already fill out
+                        if buff.last().unwrap() != &b'\0' {
                             buff = [0; 1024];
                             stream.read(&mut buff).await?;
-                   } else {
-                        break;
+                        } else {
+                            break;
+                        }
                     }
-                }
-                    
-                    if let Ok(req) = Request::try_from(string_buff.as_str()) {
 
+                    if let Ok(req) = Request::try_from(vec_buff.concat().as_slice()) {
                         // single route can have multiple method to handled(which mean has multiple handler too)
-                        'outer:for ((router_route, router_methods), router_handlers) in router
+                        'outer: for ((router_route, router_methods), router_handlers) in router
                             .routes
                             .iter()
                             .zip(router.method_routers.iter().map(|i| &i.methods).clone())
                             .zip(router.method_routers.iter().map(|i| &i.handlers).map(|h| h))
                         {
-
                             // match request with route,
                             // only taking path from user without taking the query param
                             // example: /login?usr=admin&pw=admin1234 -> /login
-                            if req.get_path().split_once("?").unwrap_or((req.get_path(), "")).0 == router_route {
-
+                            if req
+                                .get_path()
+                                .split_once("?")
+                                .unwrap_or((req.get_path(), ""))
+                                .0
+                                == router_route
+                            {
                                 //match request with method
                                 for (router_method, router_handler) in
                                     router_methods.into_iter().zip(router_handlers)
                                 {
-                                    println!("router: {:?}, req: {:?}", router_method, req.get_method());
                                     if req.get_method() == router_method {
-                                        println!("method match {:?} {:?}", req.get_method(), router_method);
                                         stream
-                                            .write_all(router_handler.call(req.clone()).raw().as_bytes())
+                                            .write_all(
+                                                router_handler.call(req.clone()).raw().as_slice(),
+                                            )
                                             .await?;
 
                                         // break to avoid triggering "Method Not Allowed"
                                         break 'outer;
                                     }
-
                                 }
 
-                                stream.write_all(Response::new()
-                                    .set_protocol(http::Protocol::HTTP_1_1).
-                                    set_status_code(405)
-                                    .set_status_text("Method Not Allowed")
-                                    .set_header(
-                                        "Allowed", 
-                                       router_methods
-                                                .iter()
-                                                .map(|method| format!("{:?}", method))
-                                                .collect::<Vec<String>>()
-                                                .join(", "))
-                                    .set_body("")
-                                    .raw()
-                                    .as_bytes()).await?;
+                                stream
+                                    .write_all(
+                                        Response::new()
+                                            .set_protocol(http::Protocol::HTTP_1_1)
+                                            .set_status_code(405)
+                                            .set_status_text("Method Not Allowed")
+                                            .set_header(
+                                                "Allowed",
+                                                router_methods
+                                                    .iter()
+                                                    .map(|method| format!("{:?}", method))
+                                                    .collect::<Vec<String>>()
+                                                    .join(", "),
+                                            )
+                                            .set_body(vec![])
+                                            .raw()
+                                            .as_slice(),
+                                    )
+                                    .await?;
                             }
                         }
 
-                        //TODO: implement fallback(not found)
                         stream
-                            .write_all(
-                                Response::new()
-                                    .set_protocol(http::Protocol::HTTP_1_1)
-                                    .set_status_code(404)
-                                    .set_status_text("Not Found".to_string())
-                                    .set_body((|| {
-                                        if cfg!(debug_assertions){
-                                            return "<h1>fallback</h1><p>this handler is called when no route is match, change this handler using Router::fallback</p>".to_string();
-                                        }
-                                        "<h1>Not Found</1>".to_string()})())
-                                    .raw()
-                                    .as_bytes(),
-                            )
+                            .write_all(router.fallback.call(req).raw().as_slice())
                             .await
                             .unwrap_or(());
                         // response "Bad Request" if the parser(`try_from` function) return Err
                     } else {
-                        stream.write_all(Response::new().set_protocol(http::Protocol::HTTP_1_1).set_status_code(400).set_status_text("Bad Request").raw().as_bytes()).await?;
-                    }}
-                } else {
-                    println!("invalid UTF8");
-                    stream.write_all(Response::new().set_protocol(http::Protocol::HTTP_1_1).set_status_code(400).set_status_text("Bad Request").set_header("Content-Type", "application/json").set_body("\"message\": \"invalid encoding request into UTF8\"").raw().as_bytes()).await?;
+                        stream
+                            .write_all(
+                                Response::new()
+                                    .set_protocol(http::Protocol::HTTP_1_1)
+                                    .set_status_code(400)
+                                    .set_status_text("Bad Request")
+                                    .raw()
+                                    .as_slice(),
+                            )
+                            .await?;
+                    }
                 }
+            } else {
+                stream
+                    .write_all(
+                        Response::new()
+                            .set_protocol(http::Protocol::HTTP_1_1)
+                            .set_status_code(400)
+                            .set_status_text("Bad Request")
+                            .set_header("Content-Type", "application/json")
+                            .set_body(
+                                "\"message\": \"invalid encoding request into UTF8\""
+                                    .as_bytes()
+                                    .to_vec(),
+                            )
+                            .raw()
+                            .as_slice(),
+                    )
+                    .await?;
+            }
 
             return Ok::<(), std::io::Error>(());
         });
@@ -134,8 +142,9 @@ where
 }
 
 pub struct Router {
-    routes: HashSet<String>,
+    routes: Vec<String>,
     method_routers: Vec<MethodRouter>,
+    fallback: Box<dyn Handler + Send + Sync>,
 }
 
 impl Router {
@@ -145,10 +154,11 @@ impl Router {
         if route.as_bytes().get(0).unwrap_or(&b'/') != &b'/' {
             panic!("route must start with '/' character");
         }
-
-        if self.routes.insert(route.to_string()) == false {
+        if self.routes.contains(&route.to_string()) {
             panic!("route '{}' is already exist", route);
         }
+
+        self.routes.push(route.to_string());
 
         self.method_routers.push(method_router);
 
@@ -157,9 +167,29 @@ impl Router {
 
     pub fn new() -> Self {
         return Router {
-            routes: HashSet::new(),
-            method_routers: vec![], 
+            routes: vec![],
+            method_routers: vec![],
+            fallback: Box::new(|| {
+                Response::new()
+                                    .set_protocol(http::Protocol::HTTP_1_1)
+                                    .set_status_code(404)
+                                    .set_status_text("Not Found".to_string())
+                                    .set_body((|| {
+                                        if cfg!(debug_assertions){
+                                            return "<h1>fallback</h1><p>this handler is called when no route is match, change this handler using Router::fallback</p>".as_bytes().to_vec();
+                                        }
+                                        "<h1>Not Found</1>".as_bytes().to_vec()})())
+            }),
         };
+    }
+
+    pub fn fallback<H>(mut self, handler: H) -> Self
+    where
+        H: Handler + Send + Sync + 'static,
+    {
+        self.fallback = Box::new(handler);
+
+        return self;
     }
 }
 
@@ -201,7 +231,6 @@ pub struct MethodRouter {
     handlers: Vec<Box<dyn Handler + Send + Sync>>,
 }
 
-
 macro_rules! method_for_all_http_method {
     ($($i:ident),*) => {
         impl MethodRouter {
@@ -237,7 +266,7 @@ macro_rules! func_for_all_http_method {
                 return MethodRouter {
                     methods: vec![Method::$i],
                     handlers: Vec::from(
-                        [Box::new(handler.into_handler()) as Box<dyn Handler + Send + Sync>; 1],  
+                        [Box::new(handler.into_handler()) as Box<dyn Handler + Send + Sync>; 1],
                     ),
                 }
             }

@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "ralavest"
-version = "0.3.0-unsafe"
+version = "1.0.0-unsafe"
 dependencies = [
  "tokio",
 ]

@@ -39,10 +39,9 @@ impl_all!(P1, P2, P3);
 impl_all!(P1, P2, P3, P4);
 impl_all!(P1, P2, P3, P4, P5);
 
-
 macro_rules! impl_all {
     ($($i:ident),*) => {
-        impl<F, R, $($i),*> IntoHandler<($($i,)*)> for F 
+        impl<F, R, $($i),*> IntoHandler<($($i,)*)> for F
         where
             F: Fn($($i),*) -> R,
             R: IntoResponse,
@@ -72,7 +71,6 @@ pub struct FunctionHandler<Input, F> {
     f: F,
     marker: PhantomData<fn() -> Input>,
 }
-
 
 impl Clone for Box<dyn Handler> {
     fn clone(&self) -> Self {
