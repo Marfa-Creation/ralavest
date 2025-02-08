@@ -54,9 +54,7 @@ impl TryFrom<&[u8]> for Request {
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         let mut value = lines(&trim(&trim(value, b' '), b'\0'));
-        let start_line = String::from_utf8_lossy(value.get(0).ok_or(ParseError(
-            "HTTP message cannot be built from empty string".to_string(),
-        ))?);
+        let start_line = String::from_utf8_lossy(value.get(0).ok_or(ParseError::EmptyBytes)?);
 
         let method: Method = {
             let mut method = String::new();
@@ -107,9 +105,7 @@ impl TryFrom<&[u8]> for Request {
                 }
 
                 // remove headers that has readed
-                let (k, v) = i
-                    .split_once(':')
-                    .ok_or(ParseError("invalid header of HTTP message".to_string()))?;
+                let (k, v) = i.split_once(':').ok_or(ParseError::InvalidHttpHeader)?;
 
                 headers.insert(k.trim().to_string(), v.trim().to_string());
 
@@ -245,9 +241,7 @@ impl TryFrom<&[u8]> for Response {
         // .lines()
         // .into_iter()
         // .collect::<Vec<&str>>();
-        let start_line = String::from_utf8_lossy(value.get(0).ok_or(ParseError(
-            "HTTP message cannot be built from empty string".to_string(),
-        ))?);
+        let start_line = String::from_utf8_lossy(value.get(0).ok_or(ParseError::EmptyBytes)?);
 
         let protocol = {
             let mut protocol = String::new();
@@ -295,9 +289,7 @@ impl TryFrom<&[u8]> for Response {
                     break;
                 }
 
-                let (k, v) = i
-                    .split_once(':')
-                    .ok_or(ParseError("invalid header of HTTP message".to_string()))?;
+                let (k, v) = i.split_once(':').ok_or(ParseError::InvalidHttpHeader)?;
 
                 headers.insert(k.trim().to_string(), v.trim().to_string());
                 // remove headers that has readed
@@ -348,11 +340,23 @@ where
 
 //TODO: make good ParseError to make error handling easier
 #[derive(Debug)]
-pub struct ParseError(pub String);
+pub enum ParseError {
+    EmptyBytes,
+    InvalidHttpHeader,
+    InvalidHttpMethod,
+    InvalidProtocol,
+}
 
 impl Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.0)
+        write!(f, "{:?}", {
+            match self {
+                ParseError::EmptyBytes => "EmptyBytes",
+                ParseError::InvalidHttpHeader => "InvalidHttpHeader",
+                ParseError::InvalidHttpMethod => "InvalidHttpMethod",
+                ParseError::InvalidProtocol => "InvalidProtocol",
+            }
+        })
     }
 }
 
@@ -423,12 +427,7 @@ impl TryFrom<&str> for Method {
                 "post" => post,
                 "patch" => patch,
                 "connect" => connect,
-                _ => {
-                    return Err(ParseError(format!(
-                        "failed to parse '{}' into http::Method",
-                        value
-                    )))
-                }
+                _ => return Err(ParseError::InvalidHttpMethod),
             }
         })
     }
@@ -451,9 +450,7 @@ impl TryFrom<&str> for Protocol {
             "http/1.1" => Ok(HTTP_1_1),
             "http/2" => Ok(HTTP_2),
             "http/3" => Ok(HTTP_3),
-            _ => Err(ParseError(
-                "invalid parsing &str into HTTP protocol".to_string(),
-            )),
+            _ => Err(ParseError::InvalidProtocol),
         };
     }
 }

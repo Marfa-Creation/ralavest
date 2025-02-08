@@ -2,11 +2,11 @@ use std::marker::PhantomData;
 
 use crate::{
     extractor::FromRequest,
-    http::{IntoResponse, Request, Response},
+    http::{IntoResponse, Method, Request, Response},
 };
 
 pub trait Handler {
-    fn call(&self, req: Request) -> Response;
+    fn call(&self, req: Request, matched: (Method, String)) -> Response;
 }
 
 pub trait IntoHandler<Input> {
@@ -24,8 +24,8 @@ macro_rules! impl_all {
             R: IntoResponse,
             $($i: FromRequest),*
         {
-            fn call(&self, _req: Request) -> Response {
-                return (self.f)($($i::extract(_req.clone())),*).into_response();
+            fn call(&self, _req: Request, _matched: (Method, String)) -> Response {
+                return (self.f)($($i::extract(_req.clone(), _matched.clone())),*).into_response();
             }
         }
     };
@@ -78,15 +78,3 @@ impl Clone for Box<dyn Handler> {
     }
 }
 
-impl<F, R> Handler for F
-where
-    R: IntoResponse,
-    F: Fn() -> R + Clone,
-{
-    fn call(&self, _: Request) -> Response
-    where
-        Self: Sized,
-    {
-        return self().into_response();
-    }
-}

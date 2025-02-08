@@ -7,7 +7,11 @@ description = "featureless HTTP server library"
 repository = "https://github.com/Marfa-Creation/ralavest"
 
 [dependencies]
+nom = "8.0.0"
+percent-encoding = "2.3.1"
+regex = "1.11.1"
 tokio = { version = "1.42.0", features = ["full"] }
+url = "2.5.4"
 
 
 # debugging purpose

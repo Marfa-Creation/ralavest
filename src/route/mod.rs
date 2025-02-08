@@ -7,6 +7,7 @@ use crate::{
     http::{self, Method, Request, Response},
 };
 
+//TODO: validate and optimize Router before used to serving
 pub async fn serve<L>(listener: L, router: Router) -> io::Result<()>
 where
     L: Into<tokio::net::TcpListener>,
@@ -54,13 +55,7 @@ where
                             // match request with route,
                             // only taking path from user without taking the query param
                             // example: /login?usr=admin&pw=admin1234 -> /login
-                            if req
-                                .get_path()
-                                .split_once("?")
-                                .unwrap_or((req.get_path(), ""))
-                                .0
-                                == router_route
-                            {
+                            if is_url_path_match(req.get_path(), router_route) {
                                 //match request with method
                                 for (router_method, router_handler) in
                                     router_methods.into_iter().zip(router_handlers)
@@ -68,7 +63,16 @@ where
                                     if req.get_method() == router_method {
                                         stream
                                             .write_all(
-                                                router_handler.call(req.clone()).raw().as_slice(),
+                                                router_handler
+                                                    .call(
+                                                        req.clone(),
+                                                        (
+                                                            router_method.to_owned(),
+                                                            router_route.to_owned(),
+                                                        ),
+                                                    )
+                                                    .raw()
+                                                    .as_slice(),
                                             )
                                             .await?;
 
@@ -99,8 +103,16 @@ where
                             }
                         }
 
+
+                        //TODO: `(Method::get, String::from("/"))` is useless, need alternative
                         stream
-                            .write_all(router.fallback.call(req).raw().as_slice())
+                            .write_all(
+                                router
+                                    .fallback
+                                    .call(req, (Method::get, String::from("/")))
+                                    .raw()
+                                    .as_slice(),
+                            )
                             .await
                             .unwrap_or(());
                         // response "Bad Request" if the parser(`try_from` function) return Err
@@ -141,6 +153,46 @@ where
     }
 }
 
+fn is_url_path_match(client_route: &str, router_route: &str) -> bool {
+    let Ok(client_route) = url::Url::from_file_path(client_route) else {
+        return false;
+    };
+    let Ok(router_route) = url::Url::from_file_path(router_route) else {
+        return false;
+    };
+
+    let client_seg = client_route.path_segments().unwrap();
+    let router_seg = router_route.path_segments().unwrap();
+
+    if client_seg.clone().count() != router_seg.clone().count() {
+        return false;
+    }
+
+    let mut _match = false;
+
+    for (client_seg, router_seg) in client_seg.into_iter().zip(router_seg) {
+        // match when route is extractor, example
+        //
+        // router_path: /greet/{name}
+        // req_path:    /greet/bob
+        //
+        // those case considered match
+        if let Some(_) = regex::Regex::new(r"(%7B)(.*+)(%7D)")
+            .unwrap()
+            .find(router_seg)
+        {
+            _match = true;
+        } else {
+            _match = client_seg == router_seg;
+        }
+
+        if _match == false {
+            return false;
+        }
+    }
+    return _match;
+}
+
 pub struct Router {
     routes: Vec<String>,
     method_routers: Vec<MethodRouter>,
@@ -169,7 +221,7 @@ impl Router {
         return Router {
             routes: vec![],
             method_routers: vec![],
-            fallback: Box::new(|| {
+            fallback: Box::new((|| {
                 Response::new()
                                     .set_protocol(http::Protocol::HTTP_1_1)
                                     .set_status_code(404)
@@ -179,7 +231,7 @@ impl Router {
                                             return "<h1>fallback</h1><p>this handler is called when no route is match, change this handler using Router::fallback</p>".as_bytes().to_vec();
                                         }
                                         "<h1>Not Found</1>".as_bytes().to_vec()})())
-            }),
+            }).into_handler()),
         };
     }
 
