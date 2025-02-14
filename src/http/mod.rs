@@ -3,6 +3,7 @@ use std::{
     fmt::Display,
 };
 
+//TODO: don't use HashMap in headers
 #[derive(Debug, Clone)]
 pub struct Request {
     method: Method,

@@ -1,5 +1,13 @@
 use std::collections::HashMap;
 
+use nom::{
+    bytes::complete::{tag, take_till1},
+    character::anychar,
+    combinator::opt,
+    multi::{many1, separated_list1},
+    sequence::separated_pair,
+    IResult, Parser,
+};
 use percent_encoding::percent_decode;
 
 use crate::http::{Method, Request};
@@ -15,9 +23,51 @@ pub trait FromRequest {
 
 pub struct Query(pub HashMap<String, String>);
 pub struct Path(pub HashMap<String, String>);
+pub struct CookieStore(pub HashMap<String, String>);
+
+impl FromRequest for CookieStore {
+    fn extract(req: Request, matched: (Method, String)) -> Self {
+        if let Some(cookie_value) = req.get_headers().get("Cookie") {
+            // return CookieStore(cookie_value)
+            if let Ok(cookies) = cookie_value_parser(cookie_value) {
+                return CookieStore(cookies.1);
+            }
+        }
+        return CookieStore(HashMap::new());
+    }
+}
+
+fn cookie_value_parser(input: &str) -> IResult<&str, HashMap<String, String>> {
+    return (
+        separated_list1(
+            tag("; "),
+            separated_pair(
+                // many1(anychar::<&str, _>),
+                take_till1(|i| i == '='),
+                nom::character::char('='),
+                take_till1(|i| i == ';'),
+            ),
+        ),
+        opt(nom::character::char(';')),
+    )
+        .parse_complete(input)
+        .map(
+            |(remain, (cookies, _))| -> (&str, HashMap<String, String>) {
+                (
+                    remain,
+                    std::collections::HashMap::from_iter(cookies.into_iter().map(|(k, v)| {
+                        (
+                            k.to_string(),
+                            v.to_string(),
+                        )
+                    })),
+                )
+            },
+        );
+
+}
 
 impl FromRequest for Path {
-    //TODO: handle error correctly
     fn extract(req: Request, matched: (Method, String)) -> Self {
         let Ok(client_url) = url::Url::from_file_path(
             percent_decode(req.get_path().as_bytes())
@@ -118,7 +168,28 @@ impl FromRequest for Request {
 
 #[cfg(test)]
 mod tests {
+    use nom::error::{self, ParseError};
+
     use super::*;
+
+    #[test]
+    fn parse_cookie() {
+        let cookie = "yummy_cookie=chocolate; tasty_cookie=strawberry;";
+
+        let cookies = CookieStore::extract(
+            Request::try_from("GET / HTTP/1.1\r\nCookie: session=hello; msg=world".as_bytes())
+                .unwrap(),
+            (Method::get, String::from("/")),
+        );
+
+        assert_eq!(
+            HashMap::from([("session", "hello"), ("msg", "world")])
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<HashMap<String, String>>(),
+            cookies.0
+        );
+    }
 
     #[test]
     fn parse_query() {
