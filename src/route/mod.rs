@@ -1,6 +1,9 @@
 use core::str;
-use std::{collections::HashMap, io, sync::Arc};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::{io, sync::Arc};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 
 use crate::{
     handler::{Handler, IntoHandler},
@@ -26,6 +29,7 @@ where
         // instead of returning the error to `serve` function
         let (mut stream, _) = listener.accept().await?;
         rt.spawn(async move {
+            let mut is_written = false;
             let mut buff = [0; 1024];
             let mut vec_buff = vec![];
 
@@ -61,32 +65,29 @@ where
                                     router_methods.into_iter().zip(router_handlers)
                                 {
                                     if req.get_method() == router_method {
-                                        stream
-                                            .write_all(
-                                                router_handler
-                                                    .call(
-                                                        req.clone(),
-                                                        (
-                                                            router_method.to_owned(),
-                                                            router_route.to_owned(),
-                                                        ),
-                                                    )
-                                                    .raw()
-                                                    .as_slice(),
-                                            )
-                                            .await?;
+                                        is_written = true;
+                                        
+                                        call_handler(
+                                            &mut stream,
+                                            router_handler,
+                                            router_method,
+                                            router_route,
+                                            &req,
+                                        )
+                                        .await?;
 
-                                        // break to avoid triggering "Method Not Allowed"
                                         break 'outer;
                                     }
                                 }
 
-                                stream
-                                    .write_all(
-                                        Response::new()
-                                            .set_protocol(http::Protocol::HTTP_1_1)
-                                            .set_status_code(405)
-                                            .set_status_text("Method Not Allowed")
+                                if !is_written {
+                                    stream
+                                        .write_all(
+                                            Response::build(
+                                                http::Protocol::HTTP_1_1,
+                                                405,
+                                                "Method Not Allowed",
+                                            )
                                             .set_header(
                                                 "Allowed",
                                                 router_methods
@@ -95,38 +96,42 @@ where
                                                     .collect::<Vec<String>>()
                                                     .join(", "),
                                             )
-                                            .set_body(vec![])
                                             .raw()
                                             .as_slice(),
-                                    )
-                                    .await?;
+                                        )
+                                        .await?;
+                                }
                             }
                         }
 
+                        if !is_written {
+                            //TODO: `(Method::get, String::from("/"))` is useless, need alternative
+                            stream
+                                .write_all(
+                                    router
+                                        .fallback
+                                        .call(req, (Method::get, String::from("/")))
+                                        .raw()
+                                        .as_slice(),
+                                )
+                                .await
+                                .unwrap_or(());
 
-                        //TODO: `(Method::get, String::from("/"))` is useless, need alternative
-                        stream
-                            .write_all(
-                                router
-                                    .fallback
-                                    .call(req, (Method::get, String::from("/")))
-                                    .raw()
-                                    .as_slice(),
-                            )
-                            .await
-                            .unwrap_or(());
-                        // response "Bad Request" if the parser(`try_from` function) return Err
+                            // response "Bad Request" if the parser(`try_from` function) return Err
+                        }
                     } else {
-                        stream
-                            .write_all(
-                                Response::new()
-                                    .set_protocol(http::Protocol::HTTP_1_1)
-                                    .set_status_code(400)
-                                    .set_status_text("Bad Request")
-                                    .raw()
-                                    .as_slice(),
-                            )
-                            .await?;
+                        if !is_written {
+                            stream
+                                .write_all(
+                                    Response::new()
+                                        .set_protocol(http::Protocol::HTTP_1_1)
+                                        .set_status_code(400)
+                                        .set_status_text("Bad Request")
+                                        .raw()
+                                        .as_slice(),
+                                )
+                                .await?;
+                        }
                     }
                 }
             } else {
@@ -151,6 +156,28 @@ where
             return Ok::<(), std::io::Error>(());
         });
     }
+}
+
+async fn call_handler(
+    stream: &mut TcpStream,
+    handler: &Box<dyn Handler + Send + Sync>,
+    router_method: &Method,
+    router_route: &String,
+    req: &Request,
+) -> std::io::Result<()> {
+    stream
+        .write_all(
+            handler
+                .call(
+                    req.clone(),
+                    (router_method.to_owned(), router_route.to_owned()),
+                )
+                .raw()
+                .as_slice(),
+        )
+        .await?;
+
+    return Ok(());
 }
 
 fn is_url_path_match(client_route: &str, router_route: &str) -> bool {
@@ -200,8 +227,6 @@ pub struct Router {
 }
 
 impl Router {
-    //TODO: encode non UTF8 route into UTF8
-    //TODO: percent encoding
     pub fn route(mut self, route: &str, method_router: MethodRouter) -> Self {
         if route.as_bytes().get(0).unwrap_or(&b'/') != &b'/' {
             panic!("route must start with '/' character");
@@ -222,15 +247,12 @@ impl Router {
             routes: vec![],
             method_routers: vec![],
             fallback: Box::new((|| {
-                Response::new()
-                                    .set_protocol(http::Protocol::HTTP_1_1)
-                                    .set_status_code(404)
-                                    .set_status_text("Not Found".to_string())
-                                    .set_body((|| {
-                                        if cfg!(debug_assertions){
-                                            return "<h1>fallback</h1><p>this handler is called when no route is match, change this handler using Router::fallback</p>".as_bytes().to_vec();
-                                        }
-                                        "<h1>Not Found</1>".as_bytes().to_vec()})())
+                Response::build(http::Protocol::HTTP_1_1, 404, "ra ketemu")
+                    .set_body((|| {
+                        if cfg!(debug_assertions){
+                            return "<h1>fallback</h1><p>this handler is called when no route is match, change this handler using Router::fallback</p>".as_bytes().to_vec();
+                        }
+                        "<h1>Not Found</1>".as_bytes().to_vec()})())
             }).into_handler()),
         };
     }
@@ -243,39 +265,6 @@ impl Router {
 
         return self;
     }
-}
-
-#[allow(dead_code)]
-//TODO: need to reviewed because lack of my knowledge about percent encoding
-fn percent_encoding(mut string: String) -> String {
-    let list = HashMap::from([
-        (":", "%3A"),
-        ("/", "%2F"),
-        ("?", "%3F"),
-        ("#", "%23"),
-        ("[", "%5B"),
-        ("]", "%5D"),
-        ("@", "%40"),
-        ("!", "%21"),
-        ("$", "%24"),
-        ("&", "%26"),
-        ("'", "%27"),
-        ("(", "%28"),
-        (")", "%29"),
-        ("*", "%2A"),
-        ("+", "%2B"),
-        (",", "%2C"),
-        (";", "%3B"),
-        ("=", "%3D"),
-        ("%", "%25"),
-        (" ", "%20"),
-    ]);
-
-    for (unencoded, encoded) in list.iter() {
-        string = string.replace(unencoded, encoded);
-    }
-
-    return string;
 }
 
 pub struct MethodRouter {

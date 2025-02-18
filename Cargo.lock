@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "ralavest"
-version = "1.0.0-unsafe"
+version = "2.1.0-unsafe"
 dependencies = [
  "nom",
  "percent-encoding",

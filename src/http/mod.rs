@@ -1,26 +1,24 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     fmt::Display,
 };
 
-//TODO: don't use HashMap in headers
 #[derive(Debug, Clone)]
 pub struct Request {
     method: Method,
     path: String,
     protocol: Protocol,
-    headers: HashMap<String, String>,
+    headers: Vec<(String, String)>,
     body: Vec<u8>,
 }
 
-//TODO: create constructor
 impl Request {
     pub fn new(method: Method, path: String, protocol: Protocol) -> Self {
         return Request {
             method,
             path,
             protocol,
-            headers: HashMap::new(),
+            headers: vec![],
             body: vec![],
         };
     }
@@ -41,8 +39,8 @@ impl Request {
         return &self.protocol;
     }
 
-    pub fn get_headers<'s>(&self) -> &HashMap<String, String> {
-        return &self.headers;
+    pub fn get_headers<'s>(&self) -> HashMap<String, String> {
+        return HashMap::from_iter(self.headers.clone());
     }
 
     pub fn get_body(&self) -> &Vec<u8> {
@@ -50,6 +48,7 @@ impl Request {
     }
 }
 
+    //TODO: use nom in particular parser
 impl TryFrom<&[u8]> for Request {
     type Error = ParseError;
 
@@ -96,7 +95,7 @@ impl TryFrom<&[u8]> for Request {
         // remove first line that has readed
         value.remove(0);
         let headers = {
-            let mut headers = HashMap::<String, String>::new();
+            let mut headers: Vec<(String, String)> = vec![];
             for i in value.clone() {
                 //only accept valid UTF8 header
                 let i = String::from_utf8_lossy(&i);
@@ -108,7 +107,7 @@ impl TryFrom<&[u8]> for Request {
                 // remove headers that has readed
                 let (k, v) = i.split_once(':').ok_or(ParseError::InvalidHttpHeader)?;
 
-                headers.insert(k.trim().to_string(), v.trim().to_string());
+                headers.push((k.trim().to_string(), v.trim().to_string()));
 
                 value.retain(|e| String::from_utf8_lossy(e) != i);
             }
@@ -139,13 +138,11 @@ pub struct Response {
     protocol: Protocol,
     status_code: String,
     status_text: String,
-    //NOTE: IDK is it slower than HashMap or not. for now i using this to make the unit test consistent
-    headers: BTreeMap<String, String>,
-    //TODO: maybe we'll use Option and make Body type
+    headers: Vec<(String, String)>,
+
     body: Vec<u8>,
 }
 
-//TODO: make good constructor
 impl Response {
     /// construct [Response] with minimal default value
     pub fn new() -> Self {
@@ -154,10 +151,10 @@ impl Response {
             protocol: Protocol::HTTP_1_1,
             status_code: 200.to_string(),
             status_text: "OK".to_string(),
-            headers: BTreeMap::from([
+            headers: vec![
                 ("Content-Length".to_string(), content.len().to_string()),
                 ("Content-Type".to_string(), "text/html".to_string()),
-            ]),
+            ],
             body: content.as_bytes().to_vec(),
         }
     }
@@ -168,7 +165,7 @@ impl Response {
             protocol,
             status_code: status_code.to_string(),
             status_text: status_text.to_string(),
-            headers: BTreeMap::new(),
+            headers: vec![],
             body: vec![],
         };
     }
@@ -195,11 +192,18 @@ impl Response {
     }
 
     pub fn set_header(mut self, key: impl ToString, value: impl ToString) -> Self {
-        self.headers.insert(key.to_string(), value.to_string());
+        self.headers.push((key.to_string(), value.to_string()));
         return self;
     }
 
-    pub fn set_body(mut self, body: Vec<u8>) -> Self {
+    pub fn set_body(mut self,body: Vec<u8>) -> Self {
+        self.body = body;
+
+        return self;
+    }
+
+    /// set body of request and automatically set "Content-Length" header
+    pub fn set_body_auto(mut self, body: Vec<u8>) -> Self {
         self.body = body.clone();
 
         return self.set_header("Content-Length".to_string(), body.len().to_string());
@@ -282,7 +286,7 @@ impl TryFrom<&[u8]> for Response {
         // remove first line that has readed
         value.remove(0);
         let headers = {
-            let mut headers = BTreeMap::<String, String>::new();
+            let mut headers: Vec<(String, String)> = vec![];
             for i in value.clone() {
                 let i = String::from_utf8_lossy(&i);
                 // based on MDN, empty line indicating the end of headers
@@ -292,7 +296,7 @@ impl TryFrom<&[u8]> for Response {
 
                 let (k, v) = i.split_once(':').ok_or(ParseError::InvalidHttpHeader)?;
 
-                headers.insert(k.trim().to_string(), v.trim().to_string());
+                headers.push((k.trim().to_string(), v.trim().to_string()));
                 // remove headers that has readed
                 value.retain(|e| String::from_utf8_lossy(e) != i);
             }
@@ -332,14 +336,12 @@ where
     S: ToString,
 {
     fn into_response(self) -> Response {
-        return Response::new()
-            .set_header("Content-Length", self.to_string().len())
+        return Response::build(Protocol::HTTP_1_1, 200, "OK")
             .set_header("Content-Type", "text/html")
-            .set_body(self.to_string().as_bytes().to_vec());
+            .set_body_auto(self.to_string().as_bytes().to_vec());
     }
 }
 
-//TODO: make good ParseError to make error handling easier
 #[derive(Debug)]
 pub enum ParseError {
     EmptyBytes,

@@ -1,12 +1,13 @@
 [package]
 name = "ralavest"
-version = "1.0.0-unsafe"
+version = "2.1.0-unsafe"
 edition = "2021"
 license = "MIT"
 description = "featureless HTTP server library"
 repository = "https://github.com/Marfa-Creation/ralavest"
 
 [dependencies]
+#TODO: use nom instead of regex
 nom = "8.0.0"
 percent-encoding = "2.3.1"
 regex = "1.11.1"
