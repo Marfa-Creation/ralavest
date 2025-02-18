@@ -2,13 +2,13 @@ use std::collections::HashMap;
 
 use nom::{
     bytes::complete::{tag, take_till1},
-    character::anychar,
     combinator::opt,
-    multi::{many1, separated_list1},
+    multi::separated_list1,
     sequence::separated_pair,
     IResult, Parser,
 };
 use percent_encoding::percent_decode;
+use serde_json::de::SliceRead;
 
 use crate::http::{Method, Request};
 
@@ -25,8 +25,26 @@ pub struct Query(pub HashMap<String, String>);
 pub struct Path(pub HashMap<String, String>);
 pub struct CookieStore(pub HashMap<String, String>);
 
+/// json extractor, return None if body of the request body not json
+pub struct Json<T>(pub Option<T>);
+
+impl<'a, T> FromRequest for Json<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    fn extract(req: Request, _: (Method, String)) -> Self {
+        Json(
+            T::deserialize(&mut serde_json::Deserializer::new(SliceRead::new(
+                req.get_body(),
+            )))
+            .ok(),
+        )
+        // todo!()
+    }
+}
+
 impl FromRequest for CookieStore {
-    fn extract(req: Request, matched: (Method, String)) -> Self {
+    fn extract(req: Request, _: (Method, String)) -> Self {
         if let Some(cookie_value) = req.get_headers().get("Cookie") {
             // return CookieStore(cookie_value)
             if let Ok(cookies) = cookie_value_parser(cookie_value) {
@@ -42,7 +60,6 @@ fn cookie_value_parser(input: &str) -> IResult<&str, HashMap<String, String>> {
         separated_list1(
             tag("; "),
             separated_pair(
-                // many1(anychar::<&str, _>),
                 take_till1(|i| i == '='),
                 nom::character::char('='),
                 take_till1(|i| i == ';'),
@@ -55,16 +72,12 @@ fn cookie_value_parser(input: &str) -> IResult<&str, HashMap<String, String>> {
             |(remain, (cookies, _))| -> (&str, HashMap<String, String>) {
                 (
                     remain,
-                    std::collections::HashMap::from_iter(cookies.into_iter().map(|(k, v)| {
-                        (
-                            k.to_string(),
-                            v.to_string(),
-                        )
-                    })),
+                    std::collections::HashMap::from_iter(
+                        cookies.iter().map(|(k, v)| (k.to_string(), v.to_string())),
+                    ),
                 )
             },
         );
-
 }
 
 impl FromRequest for Path {
@@ -168,13 +181,10 @@ impl FromRequest for Request {
 
 #[cfg(test)]
 mod tests {
-    use nom::error::{self, ParseError};
-
     use super::*;
 
     #[test]
     fn parse_cookie() {
-        let cookie = "yummy_cookie=chocolate; tasty_cookie=strawberry;";
 
         let cookies = CookieStore::extract(
             Request::try_from("GET / HTTP/1.1\r\nCookie: session=hello; msg=world".as_bytes())
